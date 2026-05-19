@@ -90,6 +90,9 @@ async def evaluate(req: EvalRequest) -> dict:
     )
     try:
         result = await run_hallucination_eval(internal)
+        # Save locally for drift tracking
+        from mcp_loop.phoenix_introspection import _save_eval_result
+        _save_eval_result(result.verdict, result.score, req.query, req.source_label)
         return result.to_dict()
     except Exception as exc:
         logger.exception("Evaluation failed")
