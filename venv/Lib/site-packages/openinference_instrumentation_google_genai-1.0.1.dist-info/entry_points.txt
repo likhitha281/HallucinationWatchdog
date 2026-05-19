@@ -1,0 +1,5 @@
+[openinference_instrumentor]
+google_genai = openinference.instrumentation.google_genai:GoogleGenAIInstrumentor
+
+[opentelemetry_instrumentor]
+google_genai = openinference.instrumentation.google_genai:GoogleGenAIInstrumentor
