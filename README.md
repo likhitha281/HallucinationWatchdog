@@ -148,15 +148,3 @@ The `@arizeai/phoenix-mcp` server exposes Phoenix's full trace query API over th
 
 **Why Gemini as judge LLM?**
 Using Gemini as both the agent model and the evaluator keeps the stack consistent. You can swap in GPT-4o or Claude by changing `EVAL_MODEL`.
-
-## Hackathon checklist
-
-- [x] Google ADK agent with `gemini-2.5-flash`
-- [x] OpenInference instrumentation (ADK + GenAI SDK)
-- [x] Spans sent to Phoenix Cloud via OTLP
-- [x] `HallucinationEvaluator` with verdict + score as span attributes
-- [x] Phoenix MCP server integration for runtime self-introspection
-- [x] Self-improvement loop (drift detection → recommendation)
-- [x] Deployed to Cloud Run
-- [x] Public GitHub repo (add MIT LICENSE before submitting)
-- [ ] 3-minute demo video
