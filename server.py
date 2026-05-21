@@ -17,9 +17,6 @@ from agent.watchdog_agent import build_watchdog_agent, init_tracing
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Lifespan: init tracing + agent once per container instance
-# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,7 +24,6 @@ async def lifespan(app: FastAPI):
     app.state.agent = build_watchdog_agent()
     logger.info("Watchdog agent ready")
     yield
-    # cleanup (e.g. flush spans) would go here
 
 
 app = FastAPI(
@@ -76,11 +72,8 @@ async def health() -> dict:
 
 @app.post("/evaluate")
 async def evaluate(req: EvalRequest) -> dict:
-    """
-    Directly evaluate a single (query, context, response) triple.
-    Returns verdict, score, explanation, and Phoenix span ID.
-    """
     from evaluator.hallucination_eval import EvalRequest as InternalReq, run_hallucination_eval
+    from mcp_loop.phoenix_introspection import _save_eval_result
 
     internal = InternalReq(
         query=req.query,
@@ -90,8 +83,6 @@ async def evaluate(req: EvalRequest) -> dict:
     )
     try:
         result = await run_hallucination_eval(internal)
-        # Save locally for drift tracking
-        from mcp_loop.phoenix_introspection import _save_eval_result
         _save_eval_result(result.verdict, result.score, req.query, req.source_label)
         return result.to_dict()
     except Exception as exc:
@@ -101,10 +92,6 @@ async def evaluate(req: EvalRequest) -> dict:
 
 @app.post("/drift")
 async def drift(req: DriftRequest) -> dict:
-    """
-    Query Phoenix for drift metrics across recent evaluations.
-    Powered by Phoenix MCP self-introspection.
-    """
     from mcp_loop.phoenix_introspection import get_drift_report
 
     try:
@@ -119,7 +106,6 @@ async def drift(req: DriftRequest) -> dict:
 
 @app.post("/worst-offenders")
 async def worst_offenders(project_name: str = "hallucination-watchdog", top_k: int = 5) -> dict:
-    """Return the top-K highest-scoring hallucination spans."""
     from mcp_loop.phoenix_introspection import get_worst_spans
 
     try:
@@ -131,14 +117,36 @@ async def worst_offenders(project_name: str = "hallucination-watchdog", top_k: i
 
 @app.post("/agent")
 async def agent_chat(req: AgentRequest) -> dict:
-    """
-    Full agent endpoint — let the Gemini watchdog agent decide which tools to call.
-    Use this for the demo: paste a natural language request.
-    """
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai.types import Content, Part
+
     agent = app.state.agent
     try:
-        result = await agent.run(user_message=req.message)
-        return {"response": result.text}
+        session_service = InMemorySessionService()
+        runner = Runner(
+            agent=agent,
+            app_name="watchdog",
+            session_service=session_service,
+        )
+        session = await session_service.create_session(
+            app_name="watchdog",
+            user_id="user",
+        )
+
+        content = Content(role="user", parts=[Part(text=req.message)])
+        response_text = ""
+        async for event in runner.run_async(
+            user_id="user",
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.is_final_response() and event.content:
+                for part in event.content.parts:
+                    if hasattr(part, "text"):
+                        response_text += part.text
+
+        return {"response": response_text}
     except Exception as exc:
         logger.exception("Agent run failed")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -153,4 +161,4 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
     port = int(os.environ.get("PORT", "8080"))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False, log_level="info")
