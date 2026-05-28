@@ -1,13 +1,20 @@
 # Hallucination Watchdog 🔬
 
-A real-time LLM hallucination detection agent built with **Google ADK + Gemini** and **Arize Phoenix**. Built for the [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com) — Arize track.
+A real-time LLM hallucination detection agent built with **Google ADK + Gemini 2.5 Flash** and **Arize Phoenix**. Built for the [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com) — Arize track.
+
+🌐 **Live demo**: `https://hallucination-watchdog-375037039776.us-central1.run.app`
+
+---
 
 ## What it does
 
-- **Evaluates** any (query, context, response) triple for hallucinations using Phoenix's `HallucinationEvaluator` with Gemini as the judge LLM
+- **Evaluates** any (query, context, response) triple for hallucinations using Arize Phoenix's `FaithfulnessEvaluator` with Gemini as the judge LLM
 - **Traces** every evaluation as an OpenTelemetry span to Arize Phoenix Cloud
-- **Self-introspects** via the Phoenix MCP server — the agent queries its own trace history at runtime to detect drift and degradation
-- **Recommends** prompt rewrites, retrieval fixes, or model swaps based on observed patterns
+- **Detects drift** — monitors hallucination rate over time and flags when quality is degrading
+- **Self-improves** — the agent reads its own evaluation history at runtime to surface patterns and recommend fixes
+- **Natural language interface** — a single `/agent` endpoint accepts free-form requests and lets Gemini decide which tools to call
+
+---
 
 ## Architecture
 
@@ -16,21 +23,21 @@ User / API call
       │
       ▼
 ┌─────────────────────────┐
-│   FastAPI server        │  Cloud Run
+│   FastAPI server        │  Google Cloud Run · us-central1
 │   (server.py)           │
 └────────────┬────────────┘
-             │ ADK agent.run()
+             │ ADK Runner
              ▼
 ┌─────────────────────────┐
 │  Gemini ADK Agent       │  gemini-2.5-flash
 │  watchdog_agent.py      │
 │                         │
 │  Tools:                 │
-│  • evaluate_response    │──► HallucinationEvaluator
-│  • check_drift          │──► Phoenix MCP Server
-│  • get_worst_offenders  │──► Phoenix MCP Server
+│  • evaluate_response    │──► FaithfulnessEvaluator (Arize Phoenix)
+│  • check_drift          │──► eval_results.json (local history)
+│  • get_worst_offenders  │──► eval_results.json (local history)
 └────────────┬────────────┘
-             │ OTel spans
+             │ OTel spans (OTLP)
              ▼
 ┌─────────────────────────┐
 │  Arize Phoenix Cloud    │  app.phoenix.arize.com
@@ -40,56 +47,97 @@ User / API call
 └─────────────────────────┘
 ```
 
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Agent framework | Google ADK |
+| LLM | Gemini 2.5 Flash via Vertex AI |
+| Hallucination evaluation | Arize Phoenix FaithfulnessEvaluator |
+| Observability | OpenTelemetry + Arize Phoenix Cloud |
+| API server | FastAPI + uvicorn |
+| Deployment | Google Cloud Run |
+| Container registry | Google Artifact Registry |
+| Language | Python 3.12 |
+
+---
+
 ## Quickstart
 
-### 1. Get credentials
+### 1. Prerequisites
 
-- **Phoenix Cloud**: free account at [app.phoenix.arize.com](https://app.phoenix.arize.com) → grab API key
-- **Google Cloud**: project with Vertex AI enabled, or a Gemini API key
+- Python 3.11+
+- Google Cloud project with Vertex AI enabled
+- Arize Phoenix Cloud account (free at [app.phoenix.arize.com](https://app.phoenix.arize.com))
+- Google AI Studio API key (free at [aistudio.google.com](https://aistudio.google.com))
 
-### 2. Set up environment
-
-```bash
-cp .env.example .env
-# Fill in PHOENIX_API_KEY and GOOGLE_API_KEY
-```
-
-### 3. Install dependencies
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
-npm install -g @arizeai/phoenix-mcp@latest   # for MCP self-introspection
+```
+
+### 3. Set environment variables
+
+```bash
+# Windows PowerShell
+$env:GOOGLE_API_KEY="your_google_api_key"
+$env:GOOGLE_GENAI_USE_VERTEXAI="False"   # True if using Vertex AI
+$env:GOOGLE_CLOUD_PROJECT="your_gcp_project"
+$env:GOOGLE_CLOUD_LOCATION="us-central1"
+$env:PHOENIX_API_KEY="your_phoenix_api_key"
+$env:PHOENIX_BASE_URL="https://app.phoenix.arize.com"
+$env:PHOENIX_COLLECTOR_ENDPOINT="https://app.phoenix.arize.com"
+$env:EVAL_MODEL="gemini-2.5-flash"
+
+# Linux/Mac
+export GOOGLE_API_KEY="your_google_api_key"
+export GOOGLE_GENAI_USE_VERTEXAI="False"
+export PHOENIX_API_KEY="your_phoenix_api_key"
+export PHOENIX_BASE_URL="https://app.phoenix.arize.com"
+export PHOENIX_COLLECTOR_ENDPOINT="https://app.phoenix.arize.com"
+export EVAL_MODEL="gemini-2.5-flash"
 ```
 
 ### 4. Run locally
 
 ```bash
-source .env  # or: export $(cat .env | xargs)
 python server.py
+```
+
+Wait for:
+```
+INFO: Watchdog agent ready
+INFO: Uvicorn running on http://0.0.0.0:8080
 ```
 
 ### 5. Test it
 
 ```bash
-# Evaluate a single response
+# Health check
+curl http://localhost:8080/health
+
+# Evaluate a hallucinated response
 curl -X POST http://localhost:8080/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "What is the boiling point of water?",
-    "context": "Water boils at 100°C at 1 atm pressure.",
-    "response": "Water boils at 75°C at sea level.",
+    "query": "What is the capital of France?",
+    "context": "The capital of France is Paris.",
+    "response": "The capital of France is London.",
     "source_label": "my-model"
   }'
 
-# Check for drift across recent evals
+# Check drift across recent evaluations
 curl -X POST http://localhost:8080/drift \
   -H "Content-Type: application/json" \
   -d '{"project_name": "hallucination-watchdog", "lookback_n": 50}'
 
-# Full agent endpoint (natural language)
+# Full agent — natural language interface
 curl -X POST http://localhost:8080/agent \
   -H "Content-Type: application/json" \
-  -d '{"message": "Check hallucination drift and tell me which spans to investigate"}'
+  -d '{"message": "Evaluate this: query=What causes rain?, context=Rain is caused by water vapor condensing in clouds., response=Rain is caused by the moon pulling water from the ocean. Then check drift and tell me what to fix."}'
 ```
 
 ### 6. Run tests
@@ -98,16 +146,7 @@ curl -X POST http://localhost:8080/agent \
 pytest tests/ -v
 ```
 
-### 7. Deploy to Cloud Run
-
-```bash
-# Store secrets in Secret Manager first
-echo -n "your-phoenix-key" | gcloud secrets create phoenix-api-key --data-file=-
-echo -n "your-google-key"  | gcloud secrets create google-api-key --data-file=-
-
-chmod +x deploy.sh
-./deploy.sh
-```
+---
 
 ## API Reference
 
@@ -115,36 +154,101 @@ chmod +x deploy.sh
 |--------|----------|-------------|
 | GET | `/health` | Health check |
 | POST | `/evaluate` | Score a single (query, context, response) triple |
-| POST | `/drift` | Compute hallucination rate + trend from Phoenix traces |
+| POST | `/drift` | Compute hallucination rate + trend from evaluation history |
 | POST | `/worst-offenders` | Return top-K highest-scoring hallucination spans |
 | POST | `/agent` | Full natural-language agent interface |
+
+### Example response — `/evaluate`
+
+```json
+{
+  "verdict": "HALLUCINATION",
+  "score": 0.5,
+  "explanation": "The context states the capital is Paris, but the response claims it is London — a direct contradiction.",
+  "span_id": "93409bab-b48c-4c2f-8cb9-c4dec284a592",
+  "latency_ms": 1718.32,
+  "source_label": "my-model"
+}
+```
+
+### Example response — `/drift`
+
+```json
+{
+  "hallucination_rate": 0.6667,
+  "trend": "stable",
+  "flagged_spans": ["What is the boiling point of water?", "What is the capital of France?"],
+  "recommendation": "🔴 High hallucination rate (66.7%). Consider: (1) improving retrieval context quality, (2) adding explicit 'answer only from context' instructions, (3) switching to a more grounded model variant.",
+  "total_evaluated": 3
+}
+```
+
+---
+
+## Deploy to Cloud Run
+
+### 1. Build and push Docker image
+
+```bash
+docker build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/YOUR_PROJECT/hallucination-watchdog/watchdog:latest .
+
+docker push us-central1-docker.pkg.dev/YOUR_PROJECT/hallucination-watchdog/watchdog:latest
+```
+
+### 2. Deploy
+
+```bash
+gcloud run deploy hallucination-watchdog \
+  --image us-central1-docker.pkg.dev/YOUR_PROJECT/hallucination-watchdog/watchdog:latest \
+  --platform managed \
+  --region us-central1 \
+  --memory 2Gi \
+  --cpu 2 \
+  --timeout 600 \
+  --min-instances 1 \
+  --set-env-vars "GOOGLE_API_KEY=your_key,PHOENIX_API_KEY=your_key,GOOGLE_GENAI_USE_VERTEXAI=False,EVAL_MODEL=gemini-2.5-flash,PHOENIX_BASE_URL=https://app.phoenix.arize.com,PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com"
+```
+
+---
 
 ## Project structure
 
 ```
 hallucination-watchdog/
 ├── agent/
-│   └── watchdog_agent.py       # ADK agent definition + tool wiring
+│   └── watchdog_agent.py          # ADK agent + tool definitions + OTel tracing
 ├── evaluator/
-│   └── hallucination_eval.py   # Phoenix HallucinationEvaluator wrapper
+│   └── hallucination_eval.py      # Arize Phoenix FaithfulnessEvaluator wrapper
 ├── mcp_loop/
-│   └── phoenix_introspection.py # Phoenix MCP self-introspection loop
+│   └── phoenix_introspection.py   # Drift detection + self-improvement loop
 ├── tests/
-│   └── test_watchdog.py        # Pytest suite
-├── server.py                   # FastAPI + Cloud Run entrypoint
-├── Dockerfile                  # Cloud Run image
+│   └── test_watchdog.py           # Pytest suite
+├── server.py                      # FastAPI + Cloud Run entrypoint
+├── Dockerfile                     # Cloud Run optimised image
 ├── requirements.txt
-├── deploy.sh                   # One-command Cloud Run deploy
-└── .env.example
+├── .env.example                   # Environment variable template
+└── LICENSE                        # MIT
 ```
+
+---
 
 ## Key design decisions
 
-**Why async + ThreadPoolExecutor for evals?**
-Phoenix's `HallucinationEvaluator` is synchronous and blocking. Running it in an executor lets the FastAPI event loop stay responsive under concurrent requests.
+**Why `FaithfulnessEvaluator` instead of `HallucinationEvaluator`?**
+`HallucinationEvaluator` was deprecated in recent Phoenix versions. `FaithfulnessEvaluator` is the recommended replacement with `faithful`/`unfaithful` labels which we map to `FACTUAL`/`HALLUCINATION` for consistency.
 
-**Why MCP subprocess for introspection?**
-The `@arizeai/phoenix-mcp` server exposes Phoenix's full trace query API over the MCP wire protocol, which is exactly what the hackathon judges expect to see. The REST fallback exists so tests don't require `npx`.
+**Why `ThreadPoolExecutor` for evaluations?**
+Phoenix's evaluator is synchronous and blocking. Wrapping it in a thread executor keeps FastAPI's async event loop responsive under concurrent requests without degrading throughput.
 
-**Why Gemini as judge LLM?**
-Using Gemini as both the agent model and the evaluator keeps the stack consistent. You can swap in GPT-4o or Claude by changing `EVAL_MODEL`.
+**Why local JSON for drift instead of Phoenix REST API?**
+Phoenix Cloud's REST API requires account-specific base URLs and auth headers that vary by deployment. Local JSON tracking is reliable, portable, and works identically in local dev and Cloud Run.
+
+**Why `--min-instances 1` on Cloud Run?**
+The ADK agent and Phoenix evaluator have significant cold start overhead (~30s). Keeping one instance always warm ensures consistent demo and production latency.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)

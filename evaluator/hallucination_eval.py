@@ -60,6 +60,7 @@ def _get_evaluator() -> FaithfulnessEvaluator:
         llm = LLM(
             model=os.environ.get("EVAL_MODEL", "gemini-2.5-flash"),
             provider="google",
+            api_key=os.environ.get("GOOGLE_API_KEY", ""),
         )
         _evaluator = FaithfulnessEvaluator(llm=llm)
     return _evaluator

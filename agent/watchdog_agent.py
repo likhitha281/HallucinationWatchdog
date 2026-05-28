@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 def init_tracing() -> None:
     """Wire OpenTelemetry → Phoenix Cloud via OTLP."""
-    phoenix_endpoint = os.environ["PHOENIX_COLLECTOR_ENDPOINT"]  # e.g. https://app.phoenix.arize.com
-    api_key = os.environ["PHOENIX_API_KEY"]
+    phoenix_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", "https://app.phoenix.arize.com")
+    api_key = os.environ.get("PHOENIX_API_KEY", "")
 
     exporter = OTLPSpanExporter(
         endpoint=f"{phoenix_endpoint}/v1/traces",
